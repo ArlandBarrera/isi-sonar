@@ -66,150 +66,247 @@ int calculateDistance() {
 
 ## Processing .pde
 
-IMPORTANTE: linea 18, el puerto debe ser el mismo que en Arduino IDE.
+IMPORTANTE: linea 6, el puerto debe ser el mismo que en Arduino IDE.
 
 ```
-import processing.serial.*; // imports library for serial communication
-import java.awt.event.KeyEvent; // imports library for reading the data from the serial port
+import processing.serial.*;
+import java.awt.event.KeyEvent;
 import java.io.IOException;
-Serial myPort; // defines Object Serial
-// defubes variables
-String angle="";
-String distance="";
-String data="";
-String noObject;
-float pixsDistance;
-int iAngle, iDistance;
-int index1=0;
-int index2=0;
-PFont orcFont;
 
-// -- setup --
-// Serial port, this must match arduino port!!!
-String serialPort = "COM3";
+// ---- config ----
+final String SERIAL_PORT = "COM3"; //  mismo puerto que Arduino!!!
+final int BAUD_RATE = 9600;
 
+final int SCREEN_WIDTH = 1300;
+final int SCREEN_HEIGHT = 750;
+
+final int INFO_PANEL_HEIGHT = 50; // altura barra negra abajo
+final int MAX_RANGE_CM = 40;     // maxima distancia del sonar (cm)
+final int SWEEP_ANGLE_STEP = 30; // espacio entre lineas anguladas de la cuadricula (grados: 30, 45, etc)
+
+// Colors
+final color RADAR_COLOR = color(98, 245, 31); // verde
+final color OBJECT_COLOR = color(255, 10, 10); // Rojo
+final color BACKGROUND_COLOR = color(0, 4); // casi negro
+
+// ---- global vars ----
+Serial myPort; 
+String rawData = "";
+int currentAngle = 0;
+int currentDistance = 0; // distancia actual de Arduino
+
+// Visual Metrics (Calculated in setup for responsiveness)
+float radarCenterX;
+float radarCenterY;
+float radarRadius; // The radius corresponding to MAX_RANGE_CM
+float pixelsPerCM; // The conversion factor for drawing objects
+
+
+// ---- setup ----
 void setup() {
- size (1200, 700); // ***CHANGE THIS TO YOUR SCREEN RESOLUTION***
- smooth();
- myPort = new Serial(this, serialPort, 9600); // starts the serial communication
- myPort.bufferUntil('.'); // reads the data from the serial port up to the character '.'. So actually it reads this: angle,distance.
+  // Use explicit numbers here to avoid the size() error in certain Processing modes
+  size(1200, 700); 
+  smooth();
+  
+  // Calculate dynamic visual metrics based on current width/height
+  radarCenterX = width / 2;
+  
+  // Set the pivot point just above the info panel
+  radarCenterY = height - INFO_PANEL_HEIGHT; 
+  
+  // Determine the maximum available radius (min of half-width or height above info panel)
+  float maxAvailableRadius = min(width / 2, height - INFO_PANEL_HEIGHT);
+  
+  // MAXIMIZE RADAR SWEEP: Use 95% of available space
+  radarRadius = maxAvailableRadius * 0.95; 
+  
+  // Calculate the scaling factor for distance-to-pixel conversion
+  pixelsPerCM = radarRadius / MAX_RANGE_CM;
+
+  // Initialize Serial Communication
+  try {
+    myPort = new Serial(this, SERIAL_PORT, BAUD_RATE);
+    myPort.bufferUntil('.'); 
+  } catch (Exception e) {
+    println("Error: Could not open serial port " + SERIAL_PORT);
+    println("Check if the port is correct and not busy (e.g., by Arduino Serial Monitor).");
+  }
 }
+
+// ---- draw loop ----
 void draw() {
-  
-  fill(98,245,31);
-  // simulating motion blur and slow fade of the moving line
+  // Simulates motion blur/fade by drawing a semi-transparent background
   noStroke();
-  fill(0,4); 
-  rect(0, 0, width, height-height*0.065); 
+  fill(BACKGROUND_COLOR);
+  // Only fade the radar area, not the info panel
+  rect(0, 0, width, height - INFO_PANEL_HEIGHT); 
   
-  fill(98,245,31); // green color
-  // calls the functions for drawing the radar
-  drawRadar(); 
+  // Set main drawing color
+  fill(RADAR_COLOR); 
+
+  // Calls drawing functions
+  drawRadar();  
   drawLine();
   drawObject();
   drawText();
 }
-void serialEvent (Serial myPort) { // starts reading data from the Serial Port
-  // reads the data from the Serial Port up to the character '.' and puts it into the String variable "data".
-  data = myPort.readStringUntil('.');
-  data = data.substring(0,data.length()-1);
-  
-  index1 = data.indexOf(","); // find the character ',' and puts it into the variable "index1"
-  angle= data.substring(0, index1); // read the data from position "0" to position of the variable index1 or thats the value of the angle the Arduino Board sent into the Serial Port
-  distance= data.substring(index1+1, data.length()); // read the data from position "index1" to the end of the data pr thats the value of the distance
-  
-  // converts the String variables into Integer
-  iAngle = int(angle);
-  iDistance = int(distance);
+
+// ---- eventos serial ----
+void serialEvent (Serial p) {
+  // Read data packet (e.g., "90,25.")
+  rawData = p.readStringUntil('.');
+  if (rawData != null) {
+    rawData = rawData.substring(0, rawData.length() - 1); // Remove '.'
+    
+    int separatorIndex = rawData.indexOf(",");
+    
+    if (separatorIndex != -1 && separatorIndex < rawData.length() - 1) {
+        // Extract angle and distance
+        String angleString = rawData.substring(0, separatorIndex);
+        String distanceString = rawData.substring(separatorIndex + 1);
+
+        // Convert strings to integers
+        // Use trim() for robustness against leading/trailing whitespace
+        try {
+            currentAngle = int(angleString.trim()); 
+            currentDistance = int(distanceString.trim());
+        } catch (NumberFormatException e) {
+            println("Error parsing serial data: " + rawData);
+        }
+    }
+  }
 }
+
+// ---- funciones de visualizacion ----
+/** Draws the stationary background grid (arcs and angle lines). */
 void drawRadar() {
   pushMatrix();
-  translate(width/2,height-height*0.074); // moves the starting coordinats to new location
+  translate(radarCenterX, radarCenterY); // Move origin to the pivot point
+  
   noFill();
   strokeWeight(2);
-  stroke(98,245,31);
-  // draws the arc lines
-  arc(0,0,(width-width*0.0625),(width-width*0.0625),PI,TWO_PI);
-  arc(0,0,(width-width*0.27),(width-width*0.27),PI,TWO_PI);
-  arc(0,0,(width-width*0.479),(width-width*0.479),PI,TWO_PI);
-  arc(0,0,(width-width*0.687),(width-width*0.687),PI,TWO_PI);
-  // draws the angle lines
-  line(-width/2,0,width/2,0);
-  line(0,0,(-width/2)*cos(radians(30)),(-width/2)*sin(radians(30)));
-  line(0,0,(-width/2)*cos(radians(60)),(-width/2)*sin(radians(60)));
-  line(0,0,(-width/2)*cos(radians(90)),(-width/2)*sin(radians(90)));
-  line(0,0,(-width/2)*cos(radians(120)),(-width/2)*sin(radians(120)));
-  line(0,0,(-width/2)*cos(radians(150)),(-width/2)*sin(radians(150)));
-  line((-width/2)*cos(radians(30)),0,width/2,0);
+  stroke(RADAR_COLOR);
+  
+  // --- Draw Distance Arcs (Rings) ---
+  int numRings = 4;
+  for (int i = 1; i <= numRings; i++) {
+    // Radius scales dynamically based on total range (MAX_RANGE_CM)
+    float ringDistance = (MAX_RANGE_CM / numRings) * i;
+    float ringRadius = ringDistance * pixelsPerCM;
+    // The radar is a semi-circle (PI to TWO_PI)
+    arc(0, 0, ringRadius * 2, ringRadius * 2, PI, TWO_PI);
+  }
+
+  // --- Draw Angle Lines (Spokes) ---
+  for (int a = 0; a <= 180; a += SWEEP_ANGLE_STEP) {
+    float rad = radians(a);
+    // x = -r * cos(angle), y = -r * sin(angle) (Y is inverted for PGraphics for the top semi-circle)
+    line(0, 0, -radarRadius * cos(rad), -radarRadius * sin(rad));
+  }
+  
   popMatrix();
 }
+
+/** Draws the detected object (a red mark) if it's within range. */
 void drawObject() {
   pushMatrix();
-  translate(width/2,height-height*0.074); // moves the starting coordinats to new location
-  strokeWeight(9);
-  stroke(255,10,10); // red color
-  pixsDistance = iDistance*((height-height*0.1666)*0.025); // covers the distance from the sensor from cm to pixels
-  // limiting the range to 40 cms
-  if(iDistance<40){
-    // draws the object according to the angle and the distance
-  line(pixsDistance*cos(radians(iAngle)),-pixsDistance*sin(radians(iAngle)),(width-width*0.505)*cos(radians(iAngle)),-(width-width*0.505)*sin(radians(iAngle)));
+  translate(radarCenterX, radarCenterY); // Move to the pivot point
+  
+  // Check if distance is valid and within the defined max range
+  if (currentDistance > 0 && currentDistance <= MAX_RANGE_CM) {
+    strokeWeight(9);
+    stroke(OBJECT_COLOR); 
+    
+    // Convert distance from cm to pixels
+    float pixsDistance = currentDistance * pixelsPerCM;
+    float rad = radians(currentAngle);
+    
+    // Calculate object coordinates
+    float obj_x = -pixsDistance * cos(rad);
+    float obj_y = -pixsDistance * sin(rad);
+    
+    // Draw the object as a short red line segment
+    // This draws a small segment 5% longer than the object's position to mark it clearly
+    line(obj_x, obj_y, obj_x * 1.05, obj_y * 1.05); 
   }
   popMatrix();
 }
+
+/** Draws the sweeping radar line (the current sonar beam). */
 void drawLine() {
   pushMatrix();
-  strokeWeight(9);
-  stroke(30,250,60);
-  translate(width/2,height-height*0.074); // moves the starting coordinats to new location
-  line(0,0,(height-height*0.12)*cos(radians(iAngle)),-(height-height*0.12)*sin(radians(iAngle))); // draws the line according to the angle
+  strokeWeight(5);
+  stroke(RADAR_COLOR);
+  translate(radarCenterX, radarCenterY); // Move to the pivot point
+
+  // Draw the sweeping line from center to the edge of the radar
+  float rad = radians(currentAngle);
+  line(0, 0, -radarRadius * cos(rad), -radarRadius * sin(rad));
   popMatrix();
 }
-void drawText() { // draws the texts on the screen
-  
-  pushMatrix();
-  if (iDistance>40) {
-    noObject = "Out of Range";
-  } else {
-    noObject = "In Range";
-  }
-  fill(0,0,0);
+
+/** Draws the informational text and labels. */
+void drawText() {
+  // --- Info Panel Background ---
+  fill(0); // Black background for text area
   noStroke();
-  rect(0, height-height*0.0648, width, height);
-  fill(98,245,31);
-  textSize(25);
+  rect(0, height - INFO_PANEL_HEIGHT, width, INFO_PANEL_HEIGHT); 
   
-  text("10cm",width-width*0.3854,height-height*0.0833);
-  text("20cm",width-width*0.281,height-height*0.0833);
-  text("30cm",width-width*0.177,height-height*0.0833);
-  text("40cm",width-width*0.0729,height-height*0.0833);
-  textSize(40);
-  text("FABRI creator", width-width*0.875, height-height*0.0277);
-  text("Angle: " + iAngle +" °", width-width*0.48, height-height*0.0277);
-  text("Dist:", width-width*0.26, height-height*0.0277);
-  if (iDistance<40) {
-    text("        " + iDistance +" cm", width-width*0.225, height-height*0.0277);
+  fill(RADAR_COLOR);
+  
+  // --- Dynamic Info ---
+  textSize(30);
+  
+  // Angle Display (Left side)
+  text("Angle: " + currentAngle + " °", 150, height - 25);
+  
+  // Distance Display (Right side)
+  String distanceText;
+  if (currentDistance > MAX_RANGE_CM || currentDistance == 0) {
+    distanceText = "Out of Range (" + MAX_RANGE_CM + " cm)";
+  } else {
+    distanceText = currentDistance + " cm";
   }
-  textSize(25);
-  fill(98,245,60);
-  translate((width-width*0.4994)+width/2*cos(radians(30)),(height-height*0.0907)-width/2*sin(radians(30)));
-  rotate(-radians(-60));
-  text("30°",0,0);
-  resetMatrix();
-  translate((width-width*0.503)+width/2*cos(radians(60)),(height-height*0.0888)-width/2*sin(radians(60)));
-  rotate(-radians(-30));
-  text("60°",0,0);
-  resetMatrix();
-  translate((width-width*0.507)+width/2*cos(radians(90)),(height-height*0.0833)-width/2*sin(radians(90)));
-  rotate(radians(0));
-  text("90°",0,0);
-  resetMatrix();
-  translate(width-width*0.513+width/2*cos(radians(120)),(height-height*0.07129)-width/2*sin(radians(120)));
-  rotate(radians(-30));
-  text("120°",0,0);
-  resetMatrix();
-  translate((width-width*0.5104)+width/2*cos(radians(150)),(height-height*0.0574)-width/2*sin(radians(150)));
-  rotate(radians(-60));
-  text("150°",0,0);
-  popMatrix(); 
+  text("Distance: " + distanceText, width - 300, height - 25); // Position 300px from right edge
+  
+  // --- Distance Labels (Rings) ---
+  int numRings = 4;
+  textSize(20);
+  textAlign(CENTER, BOTTOM); // Center text over the line, aligned to the bottom
+  
+  // Calculate a vertical offset to ensure the text is clear of the arc line
+  float textVOffset = radarCenterY - 15;
+  
+  for (int i = 1; i <= numRings; i++) {
+    int ringDistance = (MAX_RANGE_CM / numRings) * i;
+    float ringRadius = ringDistance * pixelsPerCM;
+    
+    // Position text exactly over the center of the arc on the right side
+    text(ringDistance + "cm", radarCenterX + ringRadius, textVOffset);
+  }
+  
+  // --- Angle Labels (Spokes) ---
+  textSize(18);
+  textAlign(CENTER, CENTER); // Center text entirely
+  
+  for (int a = SWEEP_ANGLE_STEP; a < 180; a += SWEEP_ANGLE_STEP) {
+    pushMatrix();
+    translate(radarCenterX, radarCenterY);
+    float rad = radians(a);
+    
+    // Calculate the position for the label just outside the radar ring (1.1 factor)
+    float textX = -radarRadius * cos(rad) * 1.1;
+    float textY = -radarRadius * sin(rad) * 1.1;
+    
+    // Move to that position
+    translate(textX, textY); 
+    
+    // Rotate text so it is generally aligned with the spoke. PI/2 (90 deg) is vertical.
+    // We rotate to be perpendicular to the spoke line.
+    rotate(-rad + PI/2); 
+    
+    text(a + "°", 0, 0);
+    popMatrix();
+  }
 }
 ```
